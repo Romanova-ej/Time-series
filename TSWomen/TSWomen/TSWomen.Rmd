@@ -1,0 +1,380 @@
+---
+title: "TSWomen"
+author: "Romanova"
+date: '27 февраля 2019 г '
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    theme: united
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+library("Rssa")
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(TTR)
+library(forecast)
+library(fpp2)
+library(colorednoise)
+library(mFilter)
+library(graphics)
+library(sarima)
+library(TSA)
+```
+
+```{r include=FALSE}
+afc <- function(filter, omega) {
+k <- seq_along(filter) - 1
+h <- function(o) sum(rev(filter) * exp(-k*1i * o)) 
+abs(sapply(omega, h))
+}
+freq <- seq(0, pi, 0.001)
+omega <- freq/2/pi
+```
+
+# Анализ конкретного временного ряда
+
+## Общие вещи
+
+Рассматриваемый ряд -- уровень женской безработицы с 1948 по 2018 год, измеренный в процентах неработающих женщин относительно всех женщин, которые имеют возможность работать.
+
+```{r include=FALSE}
+TS.data<-read.csv("Unemployment_rate women_not.csv")
+colnames(TS.data)<-c("Date","Value")
+TS.data<-TS.data[-853,]
+```
+
+```{r}
+tsWomen<-ts(TS.data$Value, frequency = 12, start = 1948)
+autoplot(tsWomen)
+```
+
+Модель ряда скорее всего нельзя назвать ни аддитивной, ни мультипликативной. На графике можно заметить, что колебания сильнее в левой части, в то время как значение тренда там ниже, чем в других местах (так что модель не мультипликативная), при этом колебания нельзя назвать постоянными, так что и не вполне аддитивная. (Это все будет более заметно на графике остатков после удаления тренда.)
+
+Автокорреляция ряда -- это его корреляция со сдвинутой версией самого себя. Это важный показатель (для недетерминированных рядов), потому что,
+он показывает, влияют ли предыдущие состояния (запаздывающие наблюдения) временного ряда на текущее состояние (линейно). 
+Таким образом, по диаграмме  автокорреляции можно увидеть, есть ли тренд (опять же линейный, так как при сильно нелинейном тренде автокорреляции могут быть и очень малы).
+
+На диаграмме автокорреляции, если автокорреляция пересекает пунктирную синюю линию, это означает, что конкретное запаздывание значимо коррелирует с текущим рядом (пунктирная синяя линия -- граница доверительной области равенства нулю автокорреляции).  
+```{r}
+ggAcf(tsWomen)
+```
+
+Тут видно, что есть тренд и периодичность (по годам).
+
+Периодограмма ряда в логарифмической шкале:
+```{r}
+spec.pgram(tsWomen,log="yes")
+```
+
+Периодограмма ряда в обычной шкале:
+```{r}
+spec.pgram(tsWomen,log="no")
+```
+
+Присутствует периодичность по годам, полугодиям и кварталам. Также есть небольшой пик для периода 2.4.
+
+## Выделение тренда разными способами
+
+### Скользящее среднее
+
+Для выделения тренда при помощи скользящего среднего используем функцию filter() с параметром sides = 1, если хотим получить причинный фильтр (Causal). То же самое по умолчанию делает функция SMA(), результат приписывается последней точке.
+```{r}
+ts.causal<-stats::filter(tsWomen, filter = rep(1/12, 12), sides = 1)
+#ts.causal<-SMA(tsWomen, n = 12)
+plot.ts(cbind(tsWomen, ts.causal), plot.type = 'single', col = c('black', 'red'),lwd=c(1,2), ylab = "Women unemp.")
+```
+
+АЧХ для такого фильтра:
+```{r}
+filt<- rep(1/12, 12)
+plot(afc(filt, freq) ~ omega, type = "l")
+```
+
+То есть скользящее среднее подавляет периодичность и высокие частоты (шум).
+
+Если хотим скользящее среднее без сдвига для четного периода, берем длину окна T+1=13 и крайним частотам даем половинные веса. (Замечание: как раз так себя ведет функция ma() для случая четного периода, ее применение дает тот же результат, что применение функции filter() с вышеупомянутыми весами).
+```{r}
+ts.f13<-stats::filter(tsWomen, filter = c(1/24,rep(1/12,11),1/24), sides = 2)
+#ts.f13<-ma(tsWomen, order = 12)
+plot.ts(cbind(tsWomen, ts.f13), plot.type = 'single', col = c('black', 'red'),lwd=c(1,2), ylab = "Women unemp.")
+```
+
+Остатки (относительно тренда, выделенного последним фильтром):
+```{r}
+plot(tsWomen-ts.f13, type="l")
+```
+
+Периодограмма остатков:
+```{r}
+temp<-ts(tsWomen[-c(1:6,847:852)]-ts.f13[-c(1:6,847:852)],frequency = 12)
+spec.pgram(temp,log="no")
+```
+
+По периодограмме можно сказать, что мы прилично выделили тренд. Остался шум+периодичность.
+
+Если возьмем окно побольше:
+```{r}
+ts.f25<-stats::filter(tsWomen, filter = c(1/48,rep(1/24,23),1/48), sides = 2)
+ts.f37<-stats::filter(tsWomen, filter = c(1/72,rep(1/36,35),1/72), sides = 2)
+plot.ts(cbind(tsWomen,ts.f37,ts.f25,ts.f13), plot.type = 'single', col = c('black', 'red','blue','green'),lwd=c(1,2,2,2), ylab = "Women unemp.")
+legend("bottomright",paste(c("ts","36+1","24+1","12+1")), col = c('black', 'red','blue','green'),lty=1,lw=c(1,2,2,2),text.font = 2,horiz=TRUE) 
+```
+
+При увеличении длины окна до 36+1 (и далее) сильно увеличивается смещение (особенно в левой части ряда), так что оставляем длину окна T=12+1 (тренд с длиной окна 24+1, в принципе, не так уж сильно смещается, его использование тоже возможно).
+
+### Скользящая медиана
+
+Вряд ли в нашем случае имеет смысл заменять среднее медианой, учитывая непонятное поведение шума (можем получить сильное смещение). Но попробуем.
+```{r}
+mmed <- runmed(tsWomen,13)
+plot.ts(cbind(tsWomen, mmed), plot.type = 'single', col = c('black', 'red'),lwd=c(1,2), ylab = "Women unemp.")
+```
+
+С целью избавления от возможных аутлаеров можно сначала применить скользящую медиану с небольшим окном (это уменьшит влияние выбросов), а потом применить скользящее среднее.
+```{r}
+mmed <- runmed(tsWomen,5)
+mean.mmed<-stats::filter(mmed, filter = c(1/24,rep(1/12,11),1/24), sides = 2)
+plot(cbind(as.numeric(tsWomen), mmed, mean.mmed), plot.type = 'single', col = c('black', 'red','blue'),lwd=c(1,2,2), ylab = "Women unemp.")
+```
+
+Интересно сравнить результат двух шагов (медиана+среднее) с результатом после одного шага (сразу среднее):
+```{r}
+plot(cbind(as.numeric(tsWomen), mean.mmed,as.numeric(ts.f13)), plot.type = 'single', col = c('black', 'red','blue'),lwd=c(1,2,2),  ylab = "Women unemp.")
+legend("bottomright",paste(c("ts","med+mean","mean")), col = c('black', 'red','blue'),lty=1,lw=c(1,2,2),text.font = 2,horiz=TRUE) 
+```
+
+Разницы почти не заметно.
+
+### Регрессия
+
+Сначала еще раз посмотрим на наш ряд:
+```{r}
+autoplot(tsWomen)
+```
+
+На простую линейную регрессию надежды никакой нет. У нас нет постоянного роста в каком-то направлении, ряд туда-сюда болтается. Можно попробовать полиномиальную регрессию, возможно, что-то получится.
+
+Начнем все равно с линейной регрессии (убедимся, что тренд она выделяет не очень).
+Проведем линейную регрессию значения временного ряда в точке по моменту времени (1,2,3,… ).
+```{r}
+trModel <- lm(tsWomen ~ c(1:length(tsWomen)),data = tsWomen)
+plot.ts(cbind(tsWomen, trModel$fitted.values), plot.type = 'single', col = c('black', 'red'),lwd=c(1,2), ylab = "Women unemp.")
+```
+
+Линейная регрессия в данном случае почти незначима (линия регрессии практически константа):
+```{r}
+trModel$coefficients
+```
+
+Периодограмма остатков:
+```{r}
+resid.ts1<-ts(resid(trModel),frequency = 12)
+spec.pgram(resid.ts1,log="no")
+```
+
+Ну да, все очень плохо, конечно. Тренд на месте.
+
+Полиномиальная регрессия. Возьмем полиномом 6го порядка.
+```{r}
+trModel6<-lm(tsWomen~poly(c(1:length(tsWomen)),6),data=tsWomen)
+plot.ts(cbind(tsWomen, trModel6$fitted.values), plot.type = 'single', col = c('black', 'red'),lwd=c(1,2), ylab = "Women unemp.")
+```
+
+Остатки
+```{r}
+plot(resid(trModel6), type="l") 
+```
+
+В остатках явно видны куски неудаленного тренда (это понятно и по предыдущему графику). Так что 6й степени полинома недостаточно.
+
+Периодограмма остатков:
+```{r}
+resid.ts6<-ts(resid(trModel6),frequency = 12)
+spec.pgram(resid.ts6,log="no")
+```
+
+Увеличим степень полинома до ... 26й степени.
+```{r}
+trModel26<-lm(tsWomen~poly(c(1:length(tsWomen)),26),data=tsWomen)
+plot.ts(cbind(tsWomen, trModel26$fitted.values), plot.type = 'single', col = c('black', 'red'),lwd=c(1,2), ylab = "Women unemp.")
+```
+
+Выглядит уже более менее неплохо.
+
+Остатки
+```{r}
+plot(resid(trModel26), type="l") 
+```
+
+Но в остатках по-прежнему есть тренд.
+
+Периодограмма остатков:
+```{r}
+resid.ts26<-ts(resid(trModel26),frequency = 12)
+spec.pgram(resid.ts26,log="no")
+```
+
+Стало лучше, чем в случае полинома 6й степени, совсем низкие частоты выделены в тренд, но все же регрессия довольно грубо делает и для нашего тренда не очень подходит. 
+
+### Локальная регрессия
+Посмотрим на результаты локальной регрессии при разных значениях параметра span.
+```{r}
+loess.Model.02 <- loess(tsWomen ~ c(1:length(tsWomen)),data = tsWomen,span = 0.02,degree = 1)
+loess.Model.05 <- loess(tsWomen ~ c(1:length(tsWomen)),data = tsWomen,span = 0.05,degree = 1)
+loess.Model.1 <- loess(tsWomen ~ c(1:length(tsWomen)),data = tsWomen,span = 0.1,degree = 1)
+plot.ts(cbind(tsWomen, loess.Model.02$fitted,loess.Model.05$fitted,loess.Model.1$fitted), plot.type = 'single', col = c('black', 'red','green','blue'),lwd=c(1,2,2,2), ylab = "Women unemp.")
+legend("bottomright",paste(c("ts","0.02","0.05","0.1")), col = c('black', 'red','green','blue'),lty=1,lw=c(1,2,2,2),text.font = 2,horiz=TRUE) 
+```
+
+Понятно, что чем span меньше, тем результат больше похож на исходный ряд. Но так как наша цель его все-таки как-то сгладить -- будем брать не слишком маленькое значение span. На графике красная линия слишком отвечает всем колебаниям ряда (и из-за этого очень неровная и болтающаяся), а синяя наоборот (особенно слева). Возьмем в итоге span = 0.05.
+```{r}
+plot.ts(cbind(tsWomen, loess.Model.05$fitted), plot.type = 'single', col = c('black', 'red'),lwd=c(1,2), ylab = "Women unemp.")
+```
+
+Периодограмма остатков:
+```{r}
+resid.loess.05<-ts(resid(loess.Model.05),frequency = 12)
+spec.pgram(resid.loess.05,log="no")
+```
+
+Ага. Вроде как и убрали, но не совсем. Еще остались низкочастотные составляющие. Если все же возьмем span = 0.02, то периодограмма покажет, что тренд выделяется более тщательно.
+```{r}
+resid.loess.02<-ts(resid(loess.Model.02),frequency = 12)
+spec.pgram(resid.loess.02,log="no")
+```
+
+### Процедура на основе локальной регрессии для борьбы с аутлаерами
+
+Робастная версия:
+```{r}
+loess.Model.05.iter <- loess(tsWomen ~ c(1:length(tsWomen)),data = tsWomen,span = 0.05,degree = 1,family = "symmetric",control = loess.control(iterations = 10))
+
+plot.ts(cbind(tsWomen, loess.Model.05$fitted,loess.Model.05.iter$fitted), plot.type = 'single', col = c('black', 'red','blue'),lwd=c(1,2,2), ylab = "Women unemp.")
+legend("bottomright",paste(c("ts","1 iter","10 iter")), col = c('black', 'red','blue'),lty=1,lw=c(1,2,2),text.font = 2,horiz=TRUE) 
+```
+
+Разница видна особенно слева. Как мы замечали и раньше, в левой части ряда у нас колебания сильнее, так что это логично. + похоже, что в левой части вторая производная тренда больше (резкие перегибы), поэтому остатки больше. Внешний цикл процедуры приписывает маленькие веса пикам в левой части и таким образом постепенно смещается вниз.
+
+### Hodrick-Prescott filter (HP-filter)
+
+При помощи изменения $\lambda$ регулируем, что для нас важнее, похожесть на исходный ряд или гладкость (маленькая вторая производная). 
+Для рядов с сезонностью рекомендуется использовать $\lambda=129600$.
+```{r}
+hp.Women<-hpfilter(tsWomen,type = "lambda",freq = 129600)
+plot.ts(cbind(tsWomen, hp.Women$trend), plot.type = 'single', col = c('black', 'red'),lwd=c(1,2), ylab = "Women unemp.")
+```
+
+Периодограмма:
+```{r}
+spec.pgram(residuals.mFilter(hp.Women),log="no")
+```
+
+Фильтр убрал только совсем низкие частоты.
+
+Уменьшаем $\lambda$ => увеличиваем похожесть, уменьшаем гладкость. Например, с $\lambda=3000$ имеем
+```{r}
+hp.Women3000<-hpfilter(tsWomen,type = "lambda",freq = 3000)
+plot.ts(cbind(tsWomen, hp.Women3000$trend), plot.type = 'single', col = c('black', 'red'),lwd=c(1,2), ylab = "Women unemp.")
+```
+
+Периодограмма:
+```{r}
+spec.pgram(residuals.mFilter(hp.Women3000),log="no")
+```
+
+
+### Сравнение трендов
+
+Сравним тренды, полученные посредством некоторых вышеупомянутых методов. 
+На графике изображены тренд - скользящее среднее с длиной окна 12+1, тренд-полиномиальная регрессия порядка 26, тренд-локальная линейная регрессия (робастный вариант, span=0.05) и тренд-HP-filter при $\lambda=3000$:
+```{r}
+plot.ts(cbind(ts.f13,  trModel26$fitted.values, loess.Model.05.iter$fitted, hp.Women3000$trend), plot.type = 'single', col = c('black', 'red','blue','green'),lwd=c(2,2,2,2), ylab = "Women unemp.")
+legend("bottomright",paste(c("MA","regr","loess","HP")), col = c('black', 'red','blue','green'),lty=1,lw=c(2,2,2,2),text.font = 2,horiz=TRUE) 
+```
+
+Скользящее среднее наиболее "отвечает" всем движениям ряда, полиномиальная регрессия описывает ряд грубее остальных, результаты, полученные при помощи локальной регрессии и HP-фильтра похожи,  но HP-фильтр при этом более гладкий (хоть мы и брали совсем маленькую $\lambda$, относительно рекомендованного).
+
+Справедливости ради заметим, что если брать скользящее среднее все-таки с большей длиной окна (24+1), то на аналогичном графике будет 3 похожих тренда:
+```{r}
+plot.ts(cbind(ts.f25,  trModel26$fitted.values, loess.Model.05.iter$fitted, hp.Women3000$trend), plot.type = 'single', col = c('black', 'red','blue','green'),lwd=c(2,2,2,2), ylab = "Women unemp.")
+legend("bottomright",paste(c("MA","regr","loess","HP")), col = c('black', 'red','blue','green'),lty=1,lw=c(2,2,2,2),text.font = 2,horiz=TRUE) 
+```
+
+Таким образом, если цель дальнейшей работы с рядом позволяет проигнорировать небольшую часть тренда, то я бы предпочла использовать тренд, выделенный HP-фильтром при $\lambda=3000$ (в силу его схожести с результатом локальной регрессии, но более высокой гладкости). 
+Однако если необходимо приблизить ряд максмально точно или выполнить тщательный de-trending, то наиболее подходящим вариантом кажется скользящее среднее с периодом 12+1 (оно выглядит лучше, чем результат локальной регрессии с сосвем маленьким span, который рассматривался в разделе 1.2.4).
+
+# Учебные примеры
+
+## Фильтр-ачх
+
+###Сумма соседних точек 
+
+Ачх:
+```{r}
+plot(afc(c(1,1)/2, freq) ~ omega, type = "l")
+```
+
+Фильтр-сумма соседних точек = скользящее среднее с окном=2. Сглаживание (довольно слабое). Уменьшает вклад высоких частот (шума).
+
+```{r}
+ts.f<-stats::filter(tsWomen, filter = c(1,1)/2, sides = 1)
+plot.ts(cbind(tsWomen, ts.f), plot.type = 'single', col = c('black', 'red'),lwd=c(1,2))
+```
+
+### Разность соседних точек
+АЧХ:
+```{r}
+plot(afc(c(-1,1)/2, freq) ~ omega, type = "l")
+```
+
+De-trending. Для нашего ряда:
+```{r}
+ts.f<-stats::filter(tsWomen, filter = c(-1,1)/2, sides = 1)
+plot.ts(cbind(tsWomen, ts.f), plot.type = 'single', col = c('black', 'red'),lwd=c(1,1))
+```
+
+Недостаток такого фильтра в том, что он усиливает высокие частоты и если наш ряд -- это детерминированный тренд + шум, то какую-то часть тренда фильтр уберет, а шум при этом увеличит. (Например, если бы тренд был линейный, то фильтр убрал бы его полностью, а шум бы при этом усилился.)
+
+## Красный и белый шум
+Красный шум:
+```{r}
+red.noise<-colored_noise(5000, 0, 1, phi=0.6)
+red.noise.ts<-ts(red.noise, frequency = 5000, start = 0)
+autoplot(red.noise.ts)
+```
+
+Для того, чтобы оценить спектральную плотность, сгладим периодограмму при помощи скользящего среднего:
+```{r}
+t<-spec.pgram(red.noise.ts,log="no",plot=FALSE)
+red.noise.pd<-ts(t$spec,frequency = 2500,start = 1)
+red.noise.pd.ma<-ma(red.noise.pd, order = 100)
+plot.ts(cbind(red.noise.pd, red.noise.pd.ma), plot.type = 'single', col = c('black', 'red'),lwd=c(1,2))
+```
+
+Белый шум:
+```{r}
+white.noise<-colored_noise(5000, 0, 1, phi=0)
+white.noise.ts<-ts(white.noise, frequency = 5000, start = 0)
+autoplot(white.noise.ts)
+```
+
+Сглаживание периодограммы белого шума.
+```{r}
+t<-spec.pgram(white.noise.ts,log="no",plot = FALSE)
+white.noise.pd<-ts(t$spec,frequency = 2500,start = 1)
+white.noise.pd.ma<-ma(white.noise.pd, order = 100)
+plot.ts(cbind(white.noise.pd, white.noise.pd.ma), plot.type = 'single', col = c('black', 'red'),lwd=c(1,2))
+```
+
+
+

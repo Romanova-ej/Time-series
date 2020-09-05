@@ -1,0 +1,25 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1559578939008.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "3450459064",
+    "id" : "E0FF710A",
+    "lastKnownWriteTime" : 1559579272,
+    "last_content_update" : 1559579272379,
+    "path" : "C:/Users/User/Desktop/10 семестр/Статистический анализ временных рядов/Отчеты RMarkdown/1. Trend/TSWomen.Rmd",
+    "project_path" : "TSWomen.Rmd",
+    "properties" : {
+        "cursorPosition" : "360,103",
+        "scrollLine" : "360"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 1,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_markdown"
+}

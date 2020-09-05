@@ -1,0 +1,427 @@
+---
+title: "SSA"
+author: "Romanova"
+date: '25 апреля 2019 г '
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    theme: united
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+library("Rssa")
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(TTR)
+library(forecast)
+library(fpp2)
+library(colorednoise)
+library(mFilter)
+library(graphics)
+library(sarima)
+library(TSA)
+```
+
+# Анализ конкретного временного ряда
+
+## Общие вещи
+
+Рассматриваемый ряд -- уровень женской безработицы с 1948 по 2018 год, измеренный в процентах неработающих женщин относительно всех женщин, которые имеют возможность работать.
+
+```{r include=FALSE}
+TS.data<-read.csv("Unemployment_rate women_not.csv")
+colnames(TS.data)<-c("Date","Value")
+TS.data<-TS.data[-853,]
+```
+
+```{r}
+tsWomen<-ts(TS.data$Value, frequency = 12, start = 1948)
+autoplot(tsWomen)
+```
+
+Модель ряда скорее всего нельзя назвать ни аддитивной, ни мультипликативной. На графике можно заметить, что колебания сильнее в левой части, в то время как значение тренда там ниже, чем в других местах (так что модель не мультипликативная), при этом колебания нельзя назвать постоянными, так что и не вполне аддитивная. (Это все будет более заметно на графике остатков после удаления тренда.)
+
+Автокорреляция ряда -- это его корреляция со сдвинутой версией самого себя. Это важный показатель (для недетерминированных рядов), потому что,
+он показывает, влияют ли предыдущие состояния (запаздывающие наблюдения) временного ряда на текущее состояние (линейно). 
+Таким образом, по диаграмме  автокорреляции можно увидеть, есть ли тренд (опять же линейный, так как при сильно нелинейном тренде автокорреляции могут быть и очень малы).
+
+На диаграмме автокорреляции, если автокорреляция пересекает пунктирную синюю линию, это означает, что конкретное запаздывание значимо коррелирует с текущим рядом (пунктирная синяя линия -- граница доверительной области равенства нулю автокорреляции).  
+
+```{r}
+ggAcf(tsWomen)
+```
+
+Тут видно, что есть тренд и периодичность (по годам).
+
+Периодограмма ряда в обычной шкале:
+```{r}
+spec.pgram(tsWomen,log="no")
+```
+
+Присутствует периодичность по годам, полугодиям и кварталам. Также есть небольшой пик для периода 2.4.
+
+## Разложение ряда
+
+### Классическое сезонное разложение
+Классическое сезонное разложение реализуется функцией decompose(). В этой функции можно выбрать, аддитивная модель или мультипликативная. У нас, как мы обсуждали выше, ни то, ни другое. Но в силу того, что увеличение шума в левой части ряда не слишком численно большое, будем считать, что это допустимо -- применять метод, ориентированный на аддитивную модель.
+```{r}
+Women.decompose<-stats::decompose(tsWomen, type="additive",filter = c(1/24,rep(1/12,11),1/24))
+plot(Women.decompose)
+```
+
+Периодограмма шума:
+```{r}
+Women.noise<-ts(tsWomen[-c(1:6,847:852)]-Women.decompose$seasonal[-c(1:6,847:852)]-Women.decompose$trend[-c(1:6,847:852)],frequency = 12)
+spec.pgram(Women.noise, log="no")
+```
+
+Вот так вот. Периодичность в шуме есть и довольно приличная.
+
+### Усовершенствованное классическое сезонное разложение
+
+```{r}
+Women.stl<-stl(tsWomen,s.window = 15,s.degree = 1, l.window = 36,robust = TRUE, outer=10)
+plot(Women.stl)
+```
+
+Периодограмма шума:
+```{r}
+Women.noise.stl<-ts((Women.stl$time.series)[,"remainder"],frequency = 12)
+spec.pgram(Women.noise.stl, log="no")
+```
+
+От периодичности избавиться получилось. Однако в периодограмме шума выделяются низкие частоты. Либо мы оставили часть тренда, либо, что вполне вероятно, мы имеем дело с красным шумом. Скорее всего второй вариант...
+
+Таким образом, надежд на то, что остаток -- белый шум, особо нет. 
+```{r}
+autocor.noise.stl<- autocorrelations(Women.noise.stl, maxlag = 30)
+whiteNoiseTest(autocor.noise.stl, h0 = "iid",method = "LjungBox",interval=FALSE) #"LiMcLeod" (default), "LjungBox", "BoxPierce".
+```
+
+Не белый шум.
+
+### SSA
+
+Посмотрим на график собственных чисел всего ряда.
+```{r}
+Women.ssa<-ssa(tsWomen,L=420)
+plot(Women.ssa)
+```
+
+График не очень приятный. Будет сложно отделить сигнал от шума (собственные числа близки).
+
+Как показали эксперименты, сразу делать ssa для нашего ряда -- это ужас. Тренд вылезает всюду и вне очереди (как мы и ожидали, посмотрев на предыдущий график, все перемешалось. Этого можно было ожидать и на основе периодограммы, там все пики примерно одинаковой величины). И рассматривать нам придется очень много собственных векторов. Поэтому лучше сначала выделим тренд, а потом остаток разделим на периодичность и шум.
+
+Будем применять последовательный SSA. 
+Для выделения тренда возьмем небольшую длину окна.
+```{r}
+trend.SSA<-ssa(tsWomen,L=36)
+plot(trend.SSA)
+plot(trend.SSA,type="vectors",idx=1:20)
+```
+
+Первые три компоненты есть тренд. 
+```{r}
+plot(reconstruct(trend.SSA, groups = list(Trend=c(1:3)), 
+     plot.method = "xyplot", layout = c(1,7), 
+     add.residuals = FALSE, add.original = FALSE))
+trend.ssa.reconstruct<-reconstruct(trend.SSA, groups = list(Trend = 1:3))
+Women.trend<-trend.ssa.reconstruct$Trend
+```
+
+Переходим к анализу ряда без тренда.
+```{r}
+Women.detrend<-ts(tsWomen-Women.trend,frequency = 12)
+Women.detrend.ssa<-ssa(Women.detrend,L=420)
+```
+
+Построим периодограмму для полученного ряда без тренда:
+```{r}
+spec.pgram(Women.detrend,log='no')
+```
+
+Как мы видели и раньше, присутствуют периоды 12, 6, 4, 2.4. И теперь еще немного выделились периоды 2 и 3, которых на периодограмме исходного ряда было не видно (из-за масштаба). Так что далее будем искать в том числе и пилу. И заметны повышенные низкие частоты.
+
+```{r}
+plot(Women.detrend.ssa)
+```
+
+Четыре  пары выделяются сильно. Но нет уверенности в том, что они возьмут всю периодичность (точнее, точно не возьмут, хотя бы потому, что мы теперь обнаружили больше периодов в ряде). Но сначала разберемся с очевидными.
+```{r}
+plot(Women.detrend.ssa, type = "paired", idx = 1:12, plot.contrib = FALSE)
+```
+
+```{r}
+parestimate(Women.detrend.ssa, groups = list(1:2,3:4,5:6,7:8,9:10,11:12), method = "esprit")
+```
+
+Первые 4 периодики не вызывают сомнений. Две последние и выглядят странно, и периоды у них странные.
+
+```{r}
+plot(wcor(Women.detrend.ssa, groups = 1:50),
+          scales = list(at = c(10, 20, 30,40,50)))
+```
+
+Также отчетливо выделяются 4 периодики. Но нам этого не достаточно.
+Сначала попробуем выведать все, что можно, из матрицы взвешенных корреляций. На ней можно заметить квадратики, особо не коррелирующие с остальными, но имеющие уже не очень большой вклад. Это пары 32-33 и 36-37. Также выделяется 19 и 46 компонента, они не коррелируют с остальными (только немного между собой).
+
+Возможно, компоненты 19 и 46 -- это две пилы. Посмотрим, как они выглядят:
+```{r}
+plot(Women.detrend.ssa, type = "vectors", idx = c(19,46), plot.contrib = FALSE)
+```
+
+19 похожа на пилу, а 46 смесь чего-то (имеет сильную модуляцию).
+
+Проверим теперь пары 32-33 и 36-37.
+```{r}
+plot(Women.detrend.ssa, type = "paired", idx = 32:37, plot.contrib = FALSE)
+```
+
+```{r}
+parestimate(Women.detrend.ssa, groups = list(32:33,36:37), method = "esprit")
+```
+
+Периоды этих парочек выглядят правдоподобно: 3 и 2.4. Такие периоды для нас актуальны. 
+```{r}
+plot(reconstruct(Women.detrend.ssa, groups = list(32:33,36:37)),
+     plot.method = "xyplot", layout = c(1,2),
+     add.residuals = FALSE, add.original = FALSE)
+```
+
+
+Берем все рассмотренные компоненты в сезонность (они описывают периоды 6,12, 4, 2.4, 3, 2):
+```{r}
+Women.detrend.reconstruct <- reconstruct(Women.detrend.ssa,
+                      groups = list(Seasonality = c(1:8,19,46,32:33,36:37)))
+```
+
+Периодограмма остатка:
+```{r}
+Women.noise<-ts(Women.detrend-Women.detrend.reconstruct$Seasonality,frequency = 12)
+spec.pgram(Women.noise, log="no")
+```
+
+Все еще остались периоды 12, 6 и 4.
+
+Снова посмотрим на матрицу взвешенных корреляций:
+```{r}
+plot(wcor(Women.detrend.ssa, groups = 1:50),
+          scales = list(at = c(10, 20, 30,40,50)))
+```
+
+Заметим, что компоненты 20-21,23-24,25-26 образуют блок компонент, которые коррелируют между собой, но не коррелируют с другими.
+```{r}
+plot(Women.detrend.ssa, type = "paired", idx = c(20,23,25), idy = c(21,24,26), plot.contrib = FALSE)
+parestimate(Women.detrend.ssa, groups = list(20:21,23:24,25:26), method = "esprit")
+```
+
+Похоже, что пары 20-21 и 23-24 -- это перемешавшиеся периодики с периодом 6. Пара 25-26 имеет неправдоподобный период 4.7, но при этом очень сильно коррелирует с парой 23-24. Это странно. В итоге эта пара перебивает период 4, так что ее тоже нужно брать. (возможно, при помощи iossa это тоже получится подкрутить).
+
+Другой блок (9:18) не похож на перемешавшиеся периодики, тк коррелирует и с остальными. Однако мы до сих пор не нашли недостающую гармонику с периодом 12. Проверим периоды на всякий случай:
+```{r}
+parestimate(Women.detrend.ssa, groups = list(9:10,11:12,13:14,15:16,17:18), method = "esprit")
+```
+
+Пара 9:10 имеет период примерно 15. Однако, так как ближе к 12ти ничего другого нет, пробуем ее добавить и, о чудо, эта пара справляется с периодом 12. (так, видимо, тоже получилось из-за того, что гармоники перемешались)
+
+Обновим результат.
+```{r}
+Women.detrend.reconstruct <- reconstruct(Women.detrend.ssa,
+                      groups = list(Seasonality = c(1:8,9:10,19,20:21,23:24,25:26,32:33,36:37)))
+```
+
+Периодограмма шума:
+```{r}
+Women.noise<-ts(Women.detrend-Women.detrend.reconstruct$Seasonality,frequency = 12)
+spec.pgram(Women.noise, log="no")
+```
+
+```{r}
+plot(Women.detrend.reconstruct , add.residuals = TRUE, add.original = TRUE,
+     plot.method = "xyplot",
+     superpose = TRUE, auto.key = list(columns = 2))
+```
+
+# Модельные ряды
+
+Модельные данные (COL4, COL10).
+```{r}
+ts.data<-read.table("stud2005.csv",header = TRUE,dec=",",sep = ";")
+ts4<-ts(ts.data$COL4)
+ts10<-ts(na.omit(ts.data$COL10))
+```
+
+## Ряд COL4
+Разберемся сначала с рядом COL4.
+```{r}
+autoplot(ts4)
+```
+
+```{r}
+ssa4<-ssa(ts4, L=500)
+plot(ssa4)
+```
+
+Уже по этому графику можно увидеть пары одинаковых собственных чисел (4-5 и 6-7), а также то, что, начиная с 8й компоненты, собственные числа мало отличаются. Возможно, стоит рассматривать как раз 7 первых компонент.
+
+```{r}
+plot(ssa4, type = "vectors", idx = 1:7)
+```
+
+Первые три собственнх вектора соответствуют тренду.
+Рассмотрим попарно остальные.
+ 
+```{r}
+plot(ssa4, type = "paired", idx = 4:7, plot.contrib = FALSE)
+```
+
+Видим, что векторы 4-5 и 6-7 образуют пары.
+6-7 с периодом 10, а 4-5 не понятно, какой-то большой период, уточним:
+```{r}
+print(parestimate(ssa4, groups = list(4:5), 
+                  method =  "esprit"))
+```
+
+Период пары 4-5 равен 27.
+
+Reconstructed series:
+```{r}
+plot(reconstruct(ssa4, groups = list(T=1:3,G27 = 4:5, G10 = 6:7)), 
+     plot.method = "xyplot", layout = c(1,3), 
+     add.residuals = FALSE, add.original = FALSE)
+```
+
+```{r}
+plot(wcor(ssa4, groups = 1:50),
+          scales = list(at = c(10, 20, 30,40,50)))
+```
+
+Первые три квадратика -- тренд (не коррелируют с остальными...почти (2 и 3 коррелируют друг с другом немного)). Следующие два квадратика -- 2 гармоники (синусы сильно коррелируют с соответствующими косинусами в паре и не коррелируют ни с чем остальным). Остальное -- шум.
+
+Положим первые 3 компоненты в тренд, 4:7 -- в периодичность.
+```{r}
+reconstruct4<- reconstruct(ssa4, 
+                      groups = list(Trend = 1:3,
+                                    Seasonality = 4:7))
+plot(reconstruct4, add.residuals = TRUE, add.original = TRUE,
+     plot.method = "xyplot",
+     superpose = TRUE, auto.key = list(columns = 2))
+```
+
+Периодограмма остатков:
+```{r}
+noise4<-ts4-reconstruct4$Trend-reconstruct4$Seasonality
+spec.pgram(noise4,log="no")
+```
+
+Внешне похоже на белый шум. Проверим.
+
+```{r}
+autocor.noise<- autocorrelations(noise4, maxlag = 30)
+#plot(autocor.noise)
+whiteNoiseTest(autocor.noise, h0 = "iid",method = "LjungBox",interval=FALSE) #"LiMcLeod" (default), "LjungBox", "BoxPierce".
+```
+
+Гипотеза о том, что остался белый шум не отверглась.
+
+## Ряд COL10
+Разбираемся со вторым модельным рядом.
+```{r}
+autoplot(ts10)
+```
+
+```{r}
+ssa10<-ssa(ts10, L=50)
+plot(ssa10)
+```
+
+```{r}
+plot(ssa10, type = "vectors", idx = 1:6)
+```
+
+```{r}
+plot(wcor(ssa10, groups = 1:50),
+          scales = list(at = c(10, 20, 30,40,50)))
+
+```
+
+Первая компонента -- тренд. 6я -- тоже часть тренда. И часть тренда смешалась с одной из гармоник (она как бы поднимается).
+ Таким образом, принимаем компоненты 1-6 за сигнал и применяем iossa, чтобы лучше отделить тренд и периодичность.
+
+```{r warning=FALSE}
+iossa10<-iossa(ssa10, nested.groups = list(c(1,6),2:3,4:5))
+plot(iossa10, type="vectors",idx=1:6)
+plot(iossa10, type="paired",idx=3:6)
+```
+
+1-2 -- тренд, 3-4, 5-6 теперь периодики (iossa переупорядочила с.в.)
+
+Периоды:
+```{r}
+print(parestimate(iossa10, groups = list(3:4,5:6), method = "esprit"))
+```
+
+Получили, что периоды равны 27 и 10 (примерно). Знаем, что это правда. А без iossa никак не получалось получить период 27, ура.
+
+Reconstructed series:
+```{r}
+plot(reconstruct(iossa10, groups = list(T=1:2,G27 = 3:4, G10 = 5:6)), 
+     plot.method = "xyplot", layout = c(1,3), 
+     add.residuals = FALSE, add.original = FALSE)
+```
+
+```{r}
+reconstruct10<- reconstruct(ssa10, 
+                      groups = list(Trend = 1:2,
+                                    Seasonality = 3:6))
+plot(reconstruct10, add.residuals = TRUE, add.original = TRUE,
+     plot.method = "xyplot",
+     superpose = TRUE, auto.key = list(columns = 2))
+```
+
+Периодограмма остатков:
+```{r}
+noise10<-ts10-reconstruct10$Trend-reconstruct10$Seasonality
+spec.pgram(noise10,log="no")
+```
+
+С одной стороны, вроде как похоже на оставшуюся периодичность (пики). Но наблюдений так мало, что это вполне могут быть просто случайные пики. 
+
+Проверка гипотезы о том, что остаток -- белый шум.
+```{r}
+autocor.noise10<- autocorrelations(noise10, maxlag = 10)
+whiteNoiseTest(autocor.noise10, h0 = "iid",method = "LjungBox",interval=FALSE) #"LiMcLeod" (default), "LjungBox", "BoxPierce".
+```
+
+Гипотеза не отвергается.
+
+## Ряд для построения огибающей
+
+Смоделируем ряд $x_{n}=\exp(-n/100)*n^{2}\cos(\pi n/3)$.
+```{r}
+N<-1:1000
+X<-ts(exp(-N/100)*N*N*cos(pi*1/3*N))
+plot.ts(X)
+```
+
+Возводим в квадрат и выделяем тренд.
+```{r}
+Y<-2*X*X
+Y.trend<-ma(Y, order = 6)
+plot.ts(cbind(Y, Y.trend), plot.type = 'single', col = c('black', 'red'),lwd=c(1,2))
+```
+
+Получаем огибающую:
+```{r}
+plot.ts(cbind(X, sqrt(Y.trend)), plot.type = 'single', col = c('black', 'red','green'),lwd=c(1,2))
+```
+

@@ -1,0 +1,377 @@
+---
+title: "ARIMA"
+author: "Romanova"
+date: '22 мая 2019 г '
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    theme: united
+    highlight: tango
+---
+
+```{r include=FALSE}
+library("Rssa")
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(TTR)
+library(forecast)
+library(fpp2)
+library(colorednoise)
+library(mFilter)
+library(aTSA)
+library(graphics)
+library(sarima)
+library(TSA)
+library(MASS)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# ARIMA
+
+<!-- ## Модельный ряд -->
+
+<!-- Модельный ряд ts10. -->
+
+<!-- ```{r} -->
+<!-- model.ts<-ts(read.table("ts10.txt",header = TRUE)) -->
+<!-- autoplot(model.ts) -->
+<!-- ``` -->
+
+<!-- Похоже, что ряд нужно дифференцировать. Так что пока что нет особого смысла смотреть на pacf и acf. Выведем их на всякий случай. -->
+
+<!-- ```{r} -->
+<!-- pacf(model.ts) -->
+<!-- acf(model.ts) -->
+<!-- ``` -->
+
+<!-- По acf видно, что ряд ну совсем не стационарный. -->
+
+<!-- Проверим это при помощи теста The augmented Dickey-Fuller (ADF) test. H0: ряд нестационарный. -->
+<!-- ```{r} -->
+<!-- adf.test(model.ts) -->
+<!-- ``` -->
+
+<!-- Гипотеза проверяется для трех типов моделей: linear model without drift and linear trend,  linear model with drift but no linear trend, a linear model with both drift and linear trend. -->
+
+<!-- У нас в любом случае гипотеза о нестационарности не отвергается. Так что действительно надо дифференцировать. -->
+
+<!-- Перейдем к разностям: -->
+<!-- ```{r} -->
+<!-- model.ts.dif<-diff(model.ts,differences = 1) -->
+<!-- autoplot(model.ts.dif) -->
+<!-- ``` -->
+
+<!-- Особого тренда не видно. Скорее всего одного дифференцирования достаточно. Посмотрим, что скажет тест: -->
+<!-- ```{r} -->
+<!-- adf.test(model.ts.dif) -->
+<!-- ``` -->
+
+<!-- Гипотеза о НЕстационарности отверглась. Так что запоминаем, что вроде как d=1 -- это хорошо и продолжаем. -->
+
+<!-- ```{r} -->
+<!-- acf(model.ts.dif) -->
+<!-- pacf(model.ts.dif) -->
+<!-- ``` -->
+
+<!-- Возможно, что q=1. Надо будет проверить, насколько подходят модели (0,1,1) или хотя бы (1,1,1). -->
+
+<!-- Автоматический выбор модели для исходного ряда: -->
+
+<!-- ```{r warning=FALSE} -->
+<!-- auto.arima(model.ts,stepwise = FALSE,trace = TRUE) -->
+<!-- ``` -->
+
+<!-- Выбирает модель (1,1,2) со сносом. -->
+
+<!-- Значение информационного критерия для модели (1,1,2) со сносом практически не отличается от значения для модели (1,1,1) со сносом. Так что (1,1,2) брать точно не будем. (1,1,1) со сносом тоже не намного лучше, чем просто (1,1,1). Если попросим auto.arima искать модели без сноса, то именно ее он нам и выдаст. -->
+<!-- ```{r} -->
+<!-- auto.arima(model.ts,stepwise = FALSE,allowdrift = FALSE) -->
+<!-- ``` -->
+
+<!-- Коэффициент перед авторегрессионным членом тут, однако, очень мал. -->
+<!-- У этой модели значение критерия 4288, а у модели (0,1,1) 4292 (4290 если со сносом).  -->
+<!-- Выбираем модель (0,1,1), сравним эту модель со сносом и без сноса. (0,1,1) --  максимально простая модель,которая при этом достаточно хорошо подходит. При обнулении q (и d тоже, конечно) значения инф. критерия резко скачут вверх. -->
+
+<!-- Заодно сравним предсказания со сносом и без: -->
+<!-- ```{r} -->
+<!-- fdrift<-Arima(model.ts, seasonal = FALSE, order = c(0,1,1), include.drift=TRUE) -->
+<!-- f<-Arima(model.ts, seasonal = FALSE, order = c(0,1,1)) -->
+<!-- fdrift -->
+<!-- ``` -->
+
+<!-- Снос небольшой, но нельзя сказать, что незначимый.  -->
+
+<!-- ```{r} -->
+<!-- plot(forecast::forecast(fdrift,h=400)) -->
+<!-- f -->
+<!-- plot(forecast::forecast(f,h=400)) -->
+<!-- ``` -->
+
+<!-- Но какое предсказание можно считать лучшим? С одной стороны, предсказание с линейным трендом кажется больше отвечающим действительности, но при предсказании на большое число шагов это предсказание может куда-то улететь. Не факт, что этот ряд (истинный) будет расти вечно, может он вырос и теперь будет на одном уровне (во второй половине ряд уже особо не растет)... -->
+<!-- К тому же в целом для ряда характерны переходы вверх-вниз (горки), так что можно ожидать, что даже с учетом линейного тренда истинный ряд может пойти  сначала вниз и тогда выйдет из доверительной области. -->
+<!-- В общем, наверное, есть смысл остановиться на простой модели (0,1,1). Хотя тут можно привести противоположные рассуждения. Вдруг растет, тогда...  -->
+
+
+<!-- Проверим адекватность модели (0,1,1) (without drift) по остаткам.  -->
+<!-- ```{r} -->
+<!-- residuals011<-f$residuals -->
+<!-- plot(residuals011) -->
+<!-- ``` -->
+
+<!-- Внешне похоже на белый шум. -->
+
+<!-- Посмотрим на acf и pacf остатков. Если модель подходит, не должно быть существенных автокорреляций. -->
+<!-- ```{r} -->
+<!-- acf(residuals011) -->
+<!-- pacf(residuals011) -->
+<!-- ``` -->
+
+<!-- Все достаточно хорошо. -->
+
+<!-- ## Примеры разных моделей -->
+<!-- Начнем с самых простых. -->
+<!-- (1,0,0), ar = $\varphi$. -->
+
+<!-- ```{r} -->
+<!-- set.seed(1) -->
+<!-- model.100<-arima.sim(n=1000,model = list(order = c(1,0,0),ar = 0.8)) -->
+<!-- autoplot(model.100) -->
+<!-- acf(model.100) -->
+<!-- pacf(model.100) -->
+<!-- auto.arima(model.100,stepwise = FALSE) -->
+<!-- ``` -->
+
+<!-- Тут по acf и pacf можно предположить, что мы имеем дело с чисто авторегрессией, так как на pacf явно выделяется 1, а в acf довольно много столбцов, не близких к нулю. А вот auto.arima... -->
+
+<!-- Немного усложним модель: (1,0,1). -->
+<!-- Возьмем коэффициент для авторегрессии = 0.7 и посмотрим, что меняется, если ma маленькое и если большое. Для маленького по модулю: -->
+<!-- ```{r} -->
+<!-- set.seed(1) -->
+<!-- model.101<-arima.sim(n=1000,model = list(order = c(1,0,1),ar = 0.7,ma=0.1)) -->
+<!-- autoplot(model.100) -->
+<!-- acf(model.101) -->
+<!-- pacf(model.101) -->
+<!-- auto.arima(model.101) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- set.seed(1) -->
+<!-- model.101<-arima.sim(n=1000,model = list(order = c(1,0,1),ar = 0.7,ma=0.9)) -->
+<!-- autoplot(model.100) -->
+<!-- acf(model.101) -->
+<!-- pacf(model.101) -->
+<!-- auto.arima(model.101) -->
+<!-- ``` -->
+
+<!-- с маленьким ma еще как-то похоже на то, что было раньше (1,0,0), но отличается тем, что в acf уже меньше нулевых столбцов (что логично, конечно), а с большим как-то уже нет. -->
+<!-- BIC выдает (2,0,2) :(. -->
+
+<!-- Для просто MA  -->
+<!-- (0,0,1): -->
+<!-- ```{r} -->
+<!-- set.seed(1) -->
+<!-- model.001<-arima.sim(n=1000,model = list(order = c(0,0,1),ma=0.7)) -->
+<!-- autoplot(model.001) -->
+<!-- acf(model.001) -->
+<!-- pacf(model.001) -->
+<!-- auto.arima(model.001, stepwise = FALSE) -->
+<!-- ``` -->
+
+<!-- По acf можно предположить, что (0,0,1). -->
+<!-- А auto.arima опять не справился. -->
+
+<!-- Более сложная модель: -->
+<!-- (1,1,2) -->
+<!-- ```{r} -->
+<!-- set.seed(1) -->
+<!-- model.112<-arima.sim(n=500,model = list(order = c(1,1,2),ar=-0.5,ma=c(0.5,0.5))) -->
+<!-- autoplot(model.112) -->
+<!-- acf(model.112) -->
+<!-- pacf(model.112) -->
+<!-- model.112.auto<-auto.arima(model.112) -->
+<!-- model.112.auto -->
+<!-- plot(forecast::forecast(model.112.auto,h=50)) -->
+<!-- ``` -->
+
+## Реальные данные
+
+```{r include=FALSE}
+TS.data<-read.csv("Unemployment_rate women_not.csv")
+colnames(TS.data)<-c("Date","Value")
+TS.data<-TS.data[-853,]
+```
+
+```{r}
+tsWomen<-ts(TS.data$Value, frequency = 12, start = 1948)
+autoplot(tsWomen)
+```
+
+Разобьем на тренировочную и тестовую выборки:
+```{r}
+Women.train<-ts(tsWomen[1:804],frequency = 12,start = 1948)
+Women.test<-ts(tsWomen[805:852],frequency = 12,start = 2015)
+```
+
+```{r}
+fit.arima<-auto.arima(Women.train,trace = FALSE,
+                         lambda = 0, stepwise = FALSE)
+for.arima<-forecast::forecast(fit.arima,h=length(Women.test))
+plot(for.arima)
+lines(tsWomen)
+```
+
+Не очень впечатляюще.
+
+# SSA 
+
+Так как для прогноза нам может хватить меньшего количества компонент в сигнале, возможно, что-то получится и для нашего ряда (хотя в целом делать для него ssa за один раз -- дело довольно гиблое).
+
+Берем обрезанный ряд уровня женской безработицы. Объем тестовой выборки = 48 (то есть 4 года).
+
+Возьмем длину окна 36. 
+```{r}
+Women.ssa.short<-ssa(Women.train,L=36)
+```
+
+Как показали эксперименты, для того, чтобы предсказание соответствовало действительности, нужно, чтобы тренд выделялся максимально хорошо. Форма тренда сложная и не достаточно брать только первые 3 собственных вектора (ранее в выделении тренда (в последовательном ssa) я ограничивалась как раз тремя, казалось, что и так все хорошо).
+
+Поэтому разберемся более детально, какие компоненты соответствуют тренду.
+
+```{r}
+plot(wcor(Women.ssa.short, groups = 1:36),
+          scales = list(at = c(4,8, 11,14,19, 30,36)))
+plot(Women.ssa.short, type="vectors",idx=1:20)
+```
+
+Первые 4 компоненты можно причилить к тренду (отчасти смешавшимся с периодикой, но сейчас это не так важно, важно понять, какие копоненты обязательно надо взять).
+Возможно, 8, 11 и 14 компоненты. 15я компонента, выделяющаяся на матрице взвешенных корреляций, -- это, видимо, пила. Возможно, к тренду можно отнести еще 19ю компоненту.
+
+```{r}
+r<-reconstruct(Women.ssa.short, groups = list(Trend=c(1:4,8,14,11,19)))
+plot(r, plot.method = "xyplot", 
+     add.residuals = FALSE, add.original = TRUE,
+      superpose = TRUE, auto.key = list(columns = 2),lwd=c(1,2))
+```
+
+Пора добавлять сезонность.
+```{r}
+r<-reconstruct(Women.ssa.short, groups = list(Trend=c(1:4,8,14,11,19),Seasonality=c(5,6,7,9,10,12,13,15)))
+plot(r, plot.method = "xyplot", 
+     add.residuals = FALSE, add.original = TRUE,
+      superpose = TRUE, auto.key = list(columns = 2),lwd=c(1,2))
+```
+
+Cезонность выглядит даже правдоподобно (несмотря на то, что мы очень условно разделяли ее с трендом). Смотрим так, потому что для данного ряда это привычнее, чем оценивать хорошесть тренда + сезонности в сумме.
+
+## Рекуррентный способ
+
+```{r}
+ssa.short.r<-rforecast(Women.ssa.short,only.new = FALSE,groups = list(c(1:14,19)),len=length(Women.test))
+plot(ssa.short.r,col='red',lwd=2)
+lines(Women.test,lwd=1)
+```
+
+Очень даже неплохо! 
+Все компоненты тренда, которые мы выбрали -- необходимы. Без 14 или 19 предсказаниеповорачивается на 90 градусов.
+
+С интервалом для предсказания:
+```{r}
+set.seed(2)
+rfor.prediction <- forecast::forecast(Women.ssa.short, groups = list(c(1:14,19)), 
+                 method = "recurrent", interval = "prediction",
+                 only.intervals = TRUE,  
+                 len = length(Women.test), level = c(0.80,0.95))
+plot(rfor.prediction)
+lines(Women.test)
+
+rfor.prediction <- forecast::forecast(Women.ssa.short, groups = list(c(1:14,19)), 
+                 method = "recurrent", interval = "confidence",
+                 only.intervals = TRUE,  
+                 len = length(Women.test), level = c(0.80,0.95))
+plot(rfor.prediction)
+lines(Women.test)
+
+```
+
+Ошибка:
+```{r}
+err.rssa<-(rfor.prediction$mean - Women.test)^2
+print(c("rssa", sqrt(mean(err.rssa))))
+```
+
+## Векторный способ
+```{r}
+set.seed(1)
+vfor.prediction <- forecast::forecast(Women.ssa.short, groups = list(c(1:7,8,9:10,14,19,11,12:13)), 
+                 method = "vector", interval = "prediction",
+                 only.intervals = TRUE,bootstrap = TRUE,
+                 len = length(Women.test), level = c(0.80,0.95))
+plot(vfor.prediction)
+lines(Women.test)
+```
+
+```{r}
+vfor.prediction <- forecast::forecast(Women.ssa.short, groups = list(c(1:7,8,9:10,14,19,11,12:13)), 
+                 method = "vector", interval = "confidence",
+                 only.intervals = TRUE,bootstrap = TRUE,
+                 len = length(Women.test), level = c(0.80,0.95))
+plot(vfor.prediction)
+lines(Women.test)
+```
+
+Ошибка:
+```{r}
+err.vssa<-(vfor.prediction$mean - Women.test)^2
+print(c("vssa", sqrt(mean(err.vssa))))
+```
+
+Тут почему-то становится лучше, если не включать 12:13 компоненты. Но если их не включать, бутстрап-интервал уползает вверх. 
+
+```{r}
+set.seed(1)
+vfor.prediction <- forecast::forecast(Women.ssa.short, groups = list(c(1:7,8,9:10,14,19,11)), 
+                 method = "vector", interval = "prediction",
+                 only.intervals = TRUE,bootstrap = TRUE,
+                 len = length(Women.test), level = c(0.80,0.95))
+plot(vfor.prediction)
+lines(Women.test)
+```
+
+Ошибка без компонент 12-13:
+```{r}
+err.vssa<-(vfor.prediction$mean - Women.test)^2
+print(c("vssa", sqrt(mean(err.vssa))))
+```
+
+# ETS
+
+```{r}
+fit.ets<-ets(Women.train,allow.multiplicative.trend = TRUE,opt.crit = "amse",biasadj = TRUE)
+fir.ets<-ets(Women.train,model="AAA",allow.multiplicative.trend = TRUE,opt.crit = "amse",biasadj = TRUE)
+for.ets<-forecast::forecast(fit.ets,len= length(Women.test),h=length(Women.test))
+plot(for.ets)
+lines(Women.test)
+```
+
+# Сравнение
+
+```{r}
+err.arima<-(for.arima$mean - Women.test)^2
+err.ets<-(for.ets$mean - Women.test)^2
+print(c("rssa", sqrt(mean(err.rssa))))
+print(c("vssa", sqrt(mean(err.vssa))))
+print(c("sarima", sqrt(mean(err.arima))))
+print(c("ets", sqrt(mean(err.ets))))
+```
+
+RMSE меньше всего для рекуррентного метода на основе SSA.
+
+Все вышеиспользованные методы, кроме методов, основанных на SSA, неплохо отражают сезонность, но совсем не отражают тренд.  
+В SSA можно достигнуть правдоподобного результата для нашего ряда, уделив особое внимание выделению тренда. Однако этот результат неустойчив: бутстрап-интервал в одном из случаев уходил вообще в другую сторону, к тому же при добавлении/удалении одной компоненты из предполагаемого сигнала предсазание может непредсказуемо развернуться.
